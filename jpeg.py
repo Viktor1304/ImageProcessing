@@ -226,6 +226,34 @@ def apply_IDCT(dct_block: NDArrayUint16) -> NDArrayFloat64:
     return idct_block
 
 
+def pad_iamage(image: NDArrayUint16, block_size: int) -> tuple[NDArrayUint16, int, int]:
+    """
+    Pads the image to make its dimensions multiples of block_size.
+
+    Args:
+        image (np.ndarray): The input image as a NumPy array.
+        block_size (int): The block size for padding.
+    Returns:
+        np.ndarray: The padded image.
+    """
+
+    h, w = image.shape
+    if h % block_size != 0:
+        pad_height = block_size - (h % block_size)
+        image = np.pad(
+            image, ((0, pad_height), (0, 0)), mode="constant", constant_values=0
+        )
+        h += pad_height
+    if w % block_size != 0:
+        pad_width = block_size - (w % block_size)
+        image = np.pad(
+            image, ((0, 0), (0, pad_width)), mode="constant", constant_values=0
+        )
+        w += pad_width
+
+    return (image, h, w)
+
+
 def apply_jpeg(img: NDArrayUint16, quality: int = 50):
     """
     Applies JPEG compression and decompression to the input image.
@@ -239,29 +267,30 @@ def apply_jpeg(img: NDArrayUint16, quality: int = 50):
     block_size = 8
     quant_matrix = QuantizationMatrix(quality=quality)
 
-    h, w = img.shape
-    if h % block_size != 0:
-        pad_height = block_size - (h % block_size)
-        img = np.pad(img, ((0, pad_height), (0, 0)), mode="constant", constant_values=0)
-        h += pad_height
-    if w % block_size != 0:
-        pad_width = block_size - (w % block_size)
-        img = np.pad(img, ((0, 0), (0, pad_width)), mode="constant", constant_values=0)
-        w += pad_width
+    img, h, w = pad_iamage(img, block_size)
     reconstructed_img = np.zeros((h, w), dtype=np.uint8)
 
     blocks = divide_image_into_blocks(img, block_size)
 
-    original_size = h * w
-    total_encoded_size = 0
-    for block in blocks:
-        level_shifted = level_shift_block(block)
-        dct_block = apply_DCT(level_shifted)
-        quantized_block = quantize_block(dct_block, quant_matrix=quant_matrix.matrix)
-        encoded_data = encode(quantized_block)
-        total_encoded_size += len(encoded_data) * 2  # Each tuple (value, count)
-    compression_ratio = original_size / total_encoded_size
-    print(f"Compression Ratio: {compression_ratio:.2f}")
+    def estimate_compression_ratio(
+        blocks: list[NDArrayUint16], h: int, w: int, quant_matrix: QuantizationMatrix
+    ) -> float:
+        original_size = h * w
+        total_encoded_size = 0
+        for block in blocks:
+            level_shifted = level_shift_block(block)
+            dct_block = apply_DCT(level_shifted)
+            quantized_block = quantize_block(
+                dct_block, quant_matrix=quant_matrix.matrix
+            )
+            encoded_data = encode(quantized_block)
+            total_encoded_size += len(encoded_data) * 2  # Each tuple (value, count)
+        compression_ratio = original_size / total_encoded_size
+        return compression_ratio
+
+    print(
+        f"Compression Ratio: {estimate_compression_ratio(blocks, h, w, quant_matrix):.2f}"
+    )
 
     for idx, block in enumerate(blocks):
         level_shifted = level_shift_block(block)
