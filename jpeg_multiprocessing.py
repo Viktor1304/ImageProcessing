@@ -1,3 +1,5 @@
+import threading
+from multiprocessing import Pool, cpu_count
 import time
 from typing import TypeAlias
 import cv2 as cv
@@ -255,6 +257,90 @@ def pad_iamage(image: NDArrayUint16, block_size: int) -> tuple[NDArrayUint16, in
     return (image, h, w)
 
 
+def encode_block_parallel(
+    block: NDArrayUint16, quant_matrix: QuantizationMatrix
+) -> list[tuple[int, int]]:
+    """
+    Gets the size of the encoded data for a single block in parallel.
+
+    Args:
+        block (np.ndarray): The input image block as a NumPy array.
+        quant_matrix (QuantizationMatrix): The quantization matrix.
+    Returns:
+        list: The RLE-encoded data as a list of tuples (value, count).
+    """
+
+    level_shifted = level_shift_block(block)
+    dct_block = apply_DCT(level_shifted)
+    quantized_block = quantize_block(dct_block, quant_matrix=quant_matrix.matrix)
+    encoded_data = encode(quantized_block)
+    return encoded_data
+
+
+def estimate_compression_ratio(
+    blocks: list[NDArrayUint16], h: int, w: int, quant_matrix: QuantizationMatrix
+) -> float:
+    """
+    Estimates the compression ratio for the given image blocks.
+
+    Args:
+        blocks (list): The list of image blocks as NumPy arrays.
+        h (int): The height of the original image.
+        w (int): The width of the original image.
+        quant_matrix (QuantizationMatrix): The quantization matrix.
+    Returns:
+        float: The estimated compression ratio.
+    """
+
+    original_size = h * w
+    total_encoded_size = 0
+
+    with Pool(processes=cpu_count()) as pool:
+        results = [
+            pool.apply_async(encode_block_parallel, args=(block, quant_matrix))
+            for block in blocks
+        ]
+        for res in results:
+            total_encoded_size += len(res.get()) * 2
+
+    compression_ratio = original_size / total_encoded_size
+    return compression_ratio
+
+
+def apply_jpeg_to_block(
+    block: NDArrayUint16,
+    idx: int,
+    quant_matrix: QuantizationMatrix,
+    block_size: int,
+    w: int,
+) -> tuple[int, int, NDArrayUint16]:
+    """
+    Applies JPEG compression and decompression to a single image block.
+
+    Args:
+        block (np.ndarray): The input image block as a NumPy array.
+        idx (int): The index of the block in the list of blocks.
+        quant_matrix (QuantizationMatrix): The quantization matrix.
+        block_size (int): The size of the image block.
+        w (int): The width of the original image.
+    Returns:
+        tuple: The (i, j) position of the block in the image and the reconstructed block.
+    """
+
+    encoded_data = encode_block_parallel(block, quant_matrix)
+    decompressed_dct_block = decompression(
+        encoded_data, block_size, quant_matrix=quant_matrix.matrix
+    )
+    idct_block = apply_IDCT(decompressed_dct_block)
+    idct_block += 128
+    idct_block = np.clip(idct_block, 0, 255).astype(np.uint16)
+
+    i = (idx * block_size) // w * block_size
+    j = (idx * block_size) % w
+
+    return i, j, idct_block
+
+
 def apply_jpeg(img: NDArrayUint16, quality: int = 50):
     """
     Applies JPEG compression and decompression to the input image.
@@ -273,53 +359,32 @@ def apply_jpeg(img: NDArrayUint16, quality: int = 50):
 
     blocks = divide_image_into_blocks(img, block_size)
 
-    def estimate_compression_ratio(
-        blocks: list[NDArrayUint16], h: int, w: int, quant_matrix: QuantizationMatrix
-    ) -> float:
-        original_size = h * w
-        total_encoded_size = 0
-        for block in blocks:
-            level_shifted = level_shift_block(block)
-            dct_block = apply_DCT(level_shifted)
-            quantized_block = quantize_block(
-                dct_block, quant_matrix=quant_matrix.matrix
+    compression_ratio = estimate_compression_ratio(blocks, h, w, quant_matrix)
+    print(f"Estimated Compression Ratio: {compression_ratio:.2f}")
+
+    with Pool(processes=cpu_count()) as pool:
+        results = [
+            pool.apply_async(
+                apply_jpeg_to_block,
+                args=(block, idx, quant_matrix, block_size, w),
             )
-            encoded_data = encode(quantized_block)
-            total_encoded_size += len(encoded_data) * 2  # Each tuple (value, count)
-        compression_ratio = original_size / total_encoded_size
-        return compression_ratio
-
-    # print(
-    #     f"Compression Ratio: {estimate_compression_ratio(blocks, h, w, quant_matrix):.2f}"
-    # )
-
-    for idx, block in enumerate(blocks):
-        level_shifted = level_shift_block(block)
-        dct_block = apply_DCT(level_shifted)
-        quantized_block = quantize_block(dct_block, quant_matrix=quant_matrix.matrix)
-        encoded_data = encode(quantized_block)
-        decompressed_dct_block = decompression(
-            encoded_data, block_size, quant_matrix=quant_matrix.matrix
-        )
-        idct_block = apply_IDCT(decompressed_dct_block)
-        idct_block += 128
-        idct_block = np.clip(idct_block, 0, 255).astype(np.uint8)
-
-        i = (idx * block_size) // w * block_size
-        j = (idx * block_size) % w
-        reconstructed_img[i : i + block_size, j : j + block_size] = idct_block
+            for idx, block in enumerate(blocks)
+        ]
+        for res in results:
+            i, j, idct_block = res.get()
+            reconstructed_img[i : i + block_size, j : j + block_size] = idct_block
 
     return reconstructed_img
 
 
 if __name__ == "__main__":
-    input_image_path = "einstein.jpg"
+    input_image_path = "your_image.jpg"
     image = read_jpeg_image(input_image_path)
 
     start = time.time()
     reconstructed_image = apply_jpeg(image)
-    end = time.time()
-    print(f"JPEG Compression and Decompression took {end - start:.2f} seconds")
+    stop = time.time()
+    print(f"Processing Time: {stop - start:.2f} seconds")
 
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
