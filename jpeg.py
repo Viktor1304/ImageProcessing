@@ -313,7 +313,7 @@ def apply_jpeg(img: NDArrayUint16, quality: int = 50):
 
 
 if __name__ == "__main__":
-    input_image_path = "einstein.jpg"
+    input_image_path = "your_image.jpg"
     image = read_jpeg_image(input_image_path)
 
     start = time.time()
