@@ -227,7 +227,7 @@ def apply_IDCT(dct_block: NDArrayUint16) -> NDArrayFloat64:
     return idct_block
 
 
-def pad_iamage(image: NDArrayUint16, block_size: int) -> tuple[NDArrayUint16, int, int]:
+def pad_image(image: NDArrayUint16, block_size: int) -> tuple[NDArrayUint16, int, int]:
     """
     Pads the image to make its dimensions multiples of block_size.
 
@@ -268,7 +268,7 @@ def apply_jpeg(img: NDArrayUint16, quality: int = 50):
     block_size = 8
     quant_matrix = QuantizationMatrix(quality=quality)
 
-    img, h, w = pad_iamage(img, block_size)
+    img, h, w = pad_image(img, block_size)
     reconstructed_img = np.zeros((h, w), dtype=np.uint8)
 
     blocks = divide_image_into_blocks(img, block_size)
@@ -289,9 +289,9 @@ def apply_jpeg(img: NDArrayUint16, quality: int = 50):
         compression_ratio = original_size / total_encoded_size
         return compression_ratio
 
-    # print(
-    #     f"Compression Ratio: {estimate_compression_ratio(blocks, h, w, quant_matrix):.2f}"
-    # )
+    print(
+        f"Compression Ratio: {estimate_compression_ratio(blocks, h, w, quant_matrix):.2f}"
+    )
 
     for idx, block in enumerate(blocks):
         level_shifted = level_shift_block(block)
@@ -319,7 +319,7 @@ if __name__ == "__main__":
     start = time.time()
     reconstructed_image = apply_jpeg(image)
     end = time.time()
-    print(f"JPEG Compression and Decompression took {end - start:.2f} seconds")
+    print(f"JPEG Compression and Decompression took {end - start:.2f} seconds.")
 
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
